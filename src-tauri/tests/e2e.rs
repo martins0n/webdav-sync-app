@@ -224,6 +224,54 @@ fn save_rule_rejects_garbage_inside_remote_path() {
 }
 
 #[test]
+fn restore_does_not_overwrite_a_current_file_at_dst() {
+    if !dav_available() {
+        eprintln!("SKIPPING restore_does_not_overwrite: dav: not configured");
+        return;
+    }
+    let data = tempfile::tempdir().unwrap();
+    let state = AppState::new(data.path().to_path_buf());
+    let local = tempfile::tempdir().unwrap();
+    let sfx = unique_suffix();
+
+    let rule = save_rule_impl(&state, make_rule(local.path(), &sfx, DeleteMode::Trash)).unwrap();
+
+    // 1. Upload v1, then delete locally and re-sync — v1 lives in garbage now.
+    std::fs::write(local.path().join("a.txt"), "old version content").unwrap();
+    run_rule_impl(&state, &rule.id).unwrap();
+    std::fs::remove_file(local.path().join("a.txt")).unwrap();
+    run_rule_impl(&state, &rule.id).unwrap();
+
+    // 2. Create a different file with the same name, sync — v2 lives at the canonical path.
+    std::fs::write(local.path().join("a.txt"), "new").unwrap();
+    run_rule_impl(&state, &rule.id).unwrap();
+
+    // 3. Restore v1 from garbage. It MUST NOT clobber v2.
+    let garbage = list_garbage_impl(&state, &rule.id).unwrap();
+    let v1 = garbage
+        .iter()
+        .find(|g| g.path.ends_with("a.txt"))
+        .expect("v1 missing from garbage");
+    restore_file_impl(&state, &rule.id, &v1.path).unwrap();
+
+    let listing = rclone_ls(&format!("{REMOTE}:e2e-{sfx}-live"));
+    let lines: Vec<&str> = listing.lines().filter(|l| !l.trim().is_empty()).collect();
+    assert_eq!(
+        lines.len(),
+        2,
+        "expected 2 files at canonical path (v2 + restored v1), got: {listing}"
+    );
+    assert!(
+        lines.iter().any(|l| l.ends_with("a.txt") && l.contains(" 3 ")),
+        "v2 (3 bytes) was overwritten! {listing}"
+    );
+    assert!(
+        lines.iter().any(|l| l.contains("a.txt.restored-")),
+        "no .restored- sibling for v1: {listing}"
+    );
+}
+
+#[test]
 fn save_rule_rejects_garbage_equal_to_remote_path() {
     let data = tempfile::tempdir().unwrap();
     let state = AppState::new(data.path().to_path_buf());

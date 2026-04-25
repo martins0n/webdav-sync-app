@@ -282,9 +282,25 @@ pub fn restore_file_impl(
             .ok_or_else(|| format!("rule {id} not found"))?
     };
 
-    // Phase 2 — rclone moveto, no lock held.
     let src = format!("{}:{}/{}", rule.remote, rule.garbage_path, garbage_subpath);
-    let dst = format!("{}:{}/{}", rule.remote, rule.remote_path, original);
+    let canonical_dst = format!("{}:{}/{}", rule.remote, rule.remote_path, original);
+
+    // Pre-check: if a current file already lives at the canonical destination,
+    // we MUST NOT silently overwrite it (rclone moveto would, by default, and
+    // the previous current version would be permanently lost — that's the only
+    // place the safety prime directive could leak). Instead, route the restore
+    // to a `.restored-<ts>` sibling path and let the user pick which to keep.
+    let dst = if dst_exists(&canonical_dst)? {
+        let ts = Utc::now().format("%Y-%m-%d-%H%M%S").to_string();
+        format!(
+            "{}:{}/{}.restored-{}",
+            rule.remote, rule.remote_path, original, ts
+        )
+    } else {
+        canonical_dst
+    };
+
+    // Phase 2 — rclone moveto, no lock held.
     let out = rclone::run(Subcommand::MoveTo, &[&src, &dst])?;
     if !out.success {
         return Err(out.stderr);
@@ -300,6 +316,23 @@ pub fn restore_file_impl(
         }
     }
     Ok(())
+}
+
+/// Cheap check: ask rclone if the exact path resolves to a file. Returns false
+/// if the parent directory or the file itself isn't there. Any actual error
+/// (auth, network) propagates so the caller doesn't proceed blindly.
+fn dst_exists(remote_path: &str) -> Result<bool, String> {
+    let out = rclone::run(Subcommand::LsJson, &[remote_path])?;
+    if !out.success {
+        let s = &out.stderr;
+        if s.contains("directory not found") || s.contains("not found") || s.contains("doesn't exist") {
+            return Ok(false);
+        }
+        return Err(out.stderr);
+    }
+    // lsjson on a single file returns a one-element array; on an empty dir
+    // returns "[]". We only treat a non-empty array as "exists".
+    Ok(out.stdout.trim() != "[]" && !out.stdout.trim().is_empty())
 }
 
 fn tail(s: &str, max: usize) -> String {
