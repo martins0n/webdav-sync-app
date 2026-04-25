@@ -1,0 +1,80 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest         # Apple Silicon
+            args: --target aarch64-apple-darwin
+            target: aarch64-apple-darwin
+          - platform: macos-13              # Intel
+            args: --target x86_64-apple-darwin
+            target: x86_64-apple-darwin
+          - platform: ubuntu-22.04
+            args: ''
+            target: ''
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install Linux Tauri deps
+        if: startsWith(matrix.platform, 'ubuntu')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libsoup-3.0-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: npm ci
+        run: npm ci
+
+      - name: Build & upload via tauri-action
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: 'WebDAV Sync ${{ github.ref_name }}'
+          releaseBody: |
+            ## WebDAV Sync ${{ github.ref_name }}
+
+            ⚠️ **Experimental** — keep an independent backup of anything you sync.
+
+            Download the asset that matches your platform:
+
+            - **macOS Apple Silicon (M1/M2/M3/M4):** `*_aarch64.dmg`
+            - **macOS Intel:** `*_x64.dmg`
+            - **Linux:** `*.deb` (Debian/Ubuntu) or `*.AppImage` (anywhere)
+
+            See `README.md` for rclone setup before first launch.
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }}
