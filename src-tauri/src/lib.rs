@@ -533,6 +533,18 @@ fn run_all_rules(app: &AppHandle) {
     });
 }
 
+/// Tray-driven freeze actions. They mirror the window's Freeze/Resume buttons
+/// and emit `freeze_changed` so an open window's countdown stays in sync.
+fn tray_freeze(app: &AppHandle, minutes: i64) {
+    let until = freeze_extend_impl(app.state::<Arc<AppState>>().as_ref(), minutes);
+    let _ = app.emit("freeze_changed", until);
+}
+
+fn tray_resume(app: &AppHandle) {
+    let until = freeze_clear_impl(app.state::<Arc<AppState>>().as_ref());
+    let _ = app.emit("freeze_changed", until);
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -571,6 +583,10 @@ pub fn run() {
                 MenuItem::with_id(app, "show", "Show window", true, None::<&str>)?;
             let run_all_item =
                 MenuItem::with_id(app, "run_all", "Run all rules now", true, None::<&str>)?;
+            let freeze_item =
+                MenuItem::with_id(app, "freeze", "Freeze sync 1h", true, None::<&str>)?;
+            let resume_item =
+                MenuItem::with_id(app, "resume", "Resume sync", true, None::<&str>)?;
             let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let menu = Menu::with_items(
                 app,
@@ -578,6 +594,9 @@ pub fn run() {
                     &show_item,
                     &PredefinedMenuItem::separator(app)?,
                     &run_all_item,
+                    &PredefinedMenuItem::separator(app)?,
+                    &freeze_item,
+                    &resume_item,
                     &PredefinedMenuItem::separator(app)?,
                     &quit_item,
                 ],
@@ -592,6 +611,8 @@ pub fn run() {
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "show" => show_main(app),
                     "run_all" => run_all_rules(app),
+                    "freeze" => tray_freeze(app, 60),
+                    "resume" => tray_resume(app),
                     "quit" => app.exit(0),
                     _ => {}
                 })

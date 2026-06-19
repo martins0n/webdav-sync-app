@@ -253,6 +253,7 @@
   let unlistenRun: (() => void) | undefined;
   let unlistenRunning: (() => void) | undefined;
   let unlistenLog: (() => void) | undefined;
+  let unlistenFreeze: (() => void) | undefined;
 
   async function toggleAutoStart(e: Event) {
     const target = e.target as HTMLInputElement;
@@ -298,12 +299,20 @@
         refresh();
       },
     );
+    // Freeze can also be toggled from the tray menu — keep the countdown in sync.
+    unlistenFreeze = await listen<number>("freeze_changed", (e) => {
+      freezeUntil = typeof e.payload === "number" ? e.payload : 0;
+      now = Date.now();
+      if (freezeUntil > now) ensureCountdown();
+      else stopCountdown();
+    });
   });
 
   onDestroy(() => {
     unlistenRun?.();
     unlistenRunning?.();
     unlistenLog?.();
+    unlistenFreeze?.();
     stopCountdown();
   });
 </script>
