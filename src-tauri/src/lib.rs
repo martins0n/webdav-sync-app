@@ -545,6 +545,22 @@ fn tray_resume(app: &AppHandle) {
     let _ = app.emit("freeze_changed", until);
 }
 
+/// Swap the menubar icon so the freeze state is visible at a glance: a
+/// snowflake while frozen, the normal mark otherwise. Both are monochrome
+/// templates, so macOS tints them for the light/dark menubar.
+fn set_tray_frozen(app: &AppHandle, frozen: bool) {
+    let Some(tray) = app.tray_by_id("main") else {
+        return;
+    };
+    let icon = if frozen {
+        tauri::include_image!("icons/tray-icon-frozen-template.png")
+    } else {
+        tauri::include_image!("icons/tray-icon-template.png")
+    };
+    let _ = tray.set_icon(Some(icon));
+    let _ = tray.set_icon_as_template(true);
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -617,6 +633,34 @@ pub fn run() {
                     _ => {}
                 })
                 .build(app)?;
+
+            // Mirror the freeze state in the tray icon. A single task reacts to
+            // every transition — tray toggle, window button, and natural expiry
+            // all flow through the freeze watch channel — and idles (no polling)
+            // whenever the state isn't changing.
+            let icon_app = app.handle().clone();
+            let icon_state = app.state::<Arc<AppState>>().inner().clone();
+            tauri::async_runtime::spawn(async move {
+                let mut rx = icon_state.freeze_watch();
+                let mut shown_frozen = false;
+                loop {
+                    let until = *rx.borrow();
+                    let frozen = until > now_ms();
+                    if frozen != shown_frozen {
+                        set_tray_frozen(&icon_app, frozen);
+                        shown_frozen = frozen;
+                    }
+                    let wait = if frozen {
+                        std::time::Duration::from_millis((until - now_ms()).max(0) as u64)
+                    } else {
+                        std::time::Duration::from_secs(60 * 60 * 24 * 365)
+                    };
+                    tokio::select! {
+                        _ = rx.changed() => {}
+                        _ = tokio::time::sleep(wait) => {}
+                    }
+                }
+            });
 
             Ok(())
         })

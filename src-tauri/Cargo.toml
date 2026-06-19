@@ -1,6 +1,6 @@
 [package]
 name = "webdav-sync-app"
-version = "0.2.0"
+version = "0.2.1"
 description = "Safe one-way local→WebDAV sync with restorable trash"
 authors = ["marti"]
 edition = "2021"

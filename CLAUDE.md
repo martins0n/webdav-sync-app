@@ -40,9 +40,11 @@ src-tauri/src/runner.rs               Per-rule tokio task: scheduler interval +
 src-tauri/src/main.rs                 5-line binary entry — calls webdav_sync_app_lib::run().
 src-tauri/tests/e2e.rs                Integration tests against a local docker WebDAV +
                                       tokio runner tests + idle-resource budget test.
-src-tauri/icons/                      App + tray icons. SVG sources kept at
-                                      /tmp/wsa-icon.svg and /tmp/wsa-tray.svg (regenerate
-                                      with rsvg-convert + iconutil; see git log for the script).
+src-tauri/icons/                      App + tray icons. tray-icon-template.png is the normal
+                                      mark; tray-icon-frozen-template.png is the same mark with
+                                      a snowflake badge shown while sync is frozen. SVG sources
+                                      kept in /tmp (regenerate with rsvg-convert + magick +
+                                      iconutil; see git log for the scripts).
 src-tauri/Cargo.toml                  Pinned: tauri 2 (`tray-icon` feature), plugin-dialog,
                                       plugin-autostart, notify 6, notify-debouncer-mini 0.4,
                                       tokio (sync, time, rt, macros).
