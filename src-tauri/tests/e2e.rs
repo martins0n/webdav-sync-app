@@ -272,6 +272,41 @@ fn restore_does_not_overwrite_a_current_file_at_dst() {
 }
 
 #[test]
+fn freeze_extend_stacks_and_clear_resets() {
+    let data = tempfile::tempdir().unwrap();
+    let state = AppState::new(data.path().to_path_buf());
+
+    assert_eq!(freeze_status_impl(&state), 0, "starts unfrozen");
+
+    let u1 = freeze_extend_impl(&state, 60);
+    assert!(u1 > 0, "freeze should be active after extend");
+    assert_eq!(freeze_status_impl(&state), u1);
+
+    // A second +60 stacks on the remaining time rather than resetting it.
+    let u2 = freeze_extend_impl(&state, 60);
+    assert_eq!(u2, u1 + 60 * 60_000, "second +1h should stack on the first");
+
+    assert_eq!(freeze_clear_impl(&state), 0, "clear returns 0");
+    assert_eq!(freeze_status_impl(&state), 0, "status is 0 after clear");
+}
+
+#[test]
+fn freeze_extend_is_capped_at_24h() {
+    let data = tempfile::tempdir().unwrap();
+    let state = AppState::new(data.path().to_path_buf());
+    // 100 hours of +1h must not push the resume time past ~24h out.
+    let mut last = 0;
+    for _ in 0..100 {
+        last = freeze_extend_impl(&state, 60);
+    }
+    let horizon = last - chrono::Utc::now().timestamp_millis();
+    assert!(
+        horizon <= 24 * 60 * 60 * 1000 + 1000,
+        "freeze horizon {horizon} ms exceeds the 24h cap"
+    );
+}
+
+#[test]
 fn save_rule_rejects_garbage_equal_to_remote_path() {
     let data = tempfile::tempdir().unwrap();
     let state = AppState::new(data.path().to_path_buf());
@@ -383,6 +418,46 @@ async fn enabled_false_disables_automation_but_run_now_still_works() {
     assert!(res.success);
     let listed2 = rclone_ls(&format!("{REMOTE}:e2e-{sfx}-live"));
     assert!(listed2.contains("must-not-upload.txt"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn freeze_suppresses_scheduler_then_catches_up_on_resume() {
+    if !dav_available() {
+        eprintln!("SKIPPING freeze_suppresses_scheduler...: dav: not configured");
+        return;
+    }
+    let data = tempfile::tempdir().unwrap();
+    let state = std::sync::Arc::new(AppState::new(data.path().to_path_buf()));
+    let local = tempfile::tempdir().unwrap();
+    let sfx = unique_suffix();
+
+    let mut rule = make_rule(local.path(), &sfx, DeleteMode::Safe);
+    rule.interval_seconds = Some(1);
+    let saved = save_rule_impl(&state, rule).unwrap();
+
+    // Freeze, then start the runner and drop a file. Scheduler ticks fire but
+    // must be suppressed for the duration of the freeze.
+    freeze_extend_impl(&state, 60);
+    std::fs::write(local.path().join("frozen.txt"), "x").unwrap();
+    state.runners.restart_for(state.clone(), &saved, None);
+
+    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+    let listed = rclone_ls(&format!("{REMOTE}:e2e-{sfx}-live"));
+    assert!(
+        !listed.contains("frozen.txt"),
+        "freeze did not suppress the scheduled sync: {listed}"
+    );
+
+    // Resume → the suppressed trigger catches up and uploads promptly.
+    freeze_clear_impl(&state);
+    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+    state.runners.stop_for(&saved.id);
+
+    let listed2 = rclone_ls(&format!("{REMOTE}:e2e-{sfx}-live"));
+    assert!(
+        listed2.contains("frozen.txt"),
+        "catch-up after resume did not upload the file: {listed2}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

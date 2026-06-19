@@ -25,10 +25,12 @@ first.
 
 ```
 src/routes/+page.svelte               All UI: rules list, rule editor, browser modal,
-                                      restore modal, per-rule live log, autostart toggle.
+                                      restore modal, per-rule live log, autostart toggle,
+                                      global freeze-sync control (Amphetamine-style +1h).
 src/routes/+layout.ts                 SvelteKit SPA marker (ssr=false).
-src-tauri/src/lib.rs                  AppState; all `*_impl` functions and Tauri command
-                                      wrappers; tray + autostart wiring; run_payload helpers.
+src-tauri/src/lib.rs                  AppState (incl. global freeze watch channel); all
+                                      `*_impl` functions and Tauri command wrappers; tray +
+                                      autostart wiring; run_payload helpers.
 src-tauri/src/store.rs                Rule struct + DeleteMode + Stats. JSON load/save in
                                       app_data_dir/rules.json.
 src-tauri/src/rclone.rs               Subcommand allowlist enum, run / run_streaming,
@@ -143,14 +145,15 @@ The 6 e2e tests skip gracefully if `dav:` isn't configured (they print
 `SKIPPING:` to stderr but pass). Runner-bearing tests use
 `#[tokio::test(flavor = "multi_thread")]` and don't require `dav:`.
 
-Current test count: **3 unit + 10 e2e = 13 total**, ~7 s runtime when `dav:`
-is up.
+Current test count: **3 unit + 14 in tests/e2e.rs = 17 total**, ~10 s runtime
+when `dav:` is up. (Three of the e2e tests cover the global freeze: two pure
+stack/cap checks that run without `dav:`, plus one runner test that needs it.)
 
 ## Build & verify
 
 ```sh
 npm run check                                   # svelte-check
-cd src-tauri && cargo test                      # 13 tests, must all pass
+cd src-tauri && cargo test                      # 17 tests, must all pass
 cd .. && npm run tauri build                    # produces .app + .dmg
 "src-tauri/target/release/bundle/macos/WebDAV Sync.app/Contents/MacOS/webdav-sync-app"
                                                 # smoke-launch and check stdout/stderr empty

@@ -1,6 +1,6 @@
 {
   "name": "webdav-sync-app",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Safe one-way local→WebDAV sync with restorable trash",
   "type": "module",
   "scripts": {

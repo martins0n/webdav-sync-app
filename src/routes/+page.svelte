@@ -51,6 +51,15 @@
   let error = $state<string>("");
   let browser = $state<{ target: "remote_path" | "garbage_path"; path: string; dirs: string[]; loading: boolean } | null>(null);
 
+  // Global "freeze" — pauses scheduled/watched syncs until `freezeUntil` (epoch
+  // ms; 0 = not frozen). `now` ticks once a second only while frozen so the
+  // countdown re-renders without an always-on timer.
+  let freezeUntil = $state(0);
+  let now = $state(Date.now());
+  let countdownTimer: ReturnType<typeof setInterval> | undefined;
+  const frozen = $derived(freezeUntil > now);
+  const remaining = $derived(Math.max(0, freezeUntil - now));
+
   function blank(): Rule {
     return {
       id: "",
@@ -193,6 +202,54 @@
     return `${(n / 1024 / 1024).toFixed(1)} MB`;
   }
 
+  function fmtDuration(ms: number) {
+    const s = Math.floor(ms / 1000);
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const sec = s % 60;
+    const mm = String(m).padStart(2, "0");
+    const ss = String(sec).padStart(2, "0");
+    return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
+  }
+
+  function stopCountdown() {
+    if (countdownTimer) {
+      clearInterval(countdownTimer);
+      countdownTimer = undefined;
+    }
+  }
+
+  function ensureCountdown() {
+    now = Date.now();
+    if (freezeUntil > now && !countdownTimer) {
+      countdownTimer = setInterval(() => {
+        now = Date.now();
+        if (freezeUntil <= now) {
+          freezeUntil = 0;
+          stopCountdown();
+        }
+      }, 1000);
+    }
+  }
+
+  async function freezeExtend(minutes: number) {
+    try {
+      freezeUntil = await invoke<number>("freeze_extend", { minutes });
+      ensureCountdown();
+    } catch (e) {
+      error = String(e);
+    }
+  }
+
+  async function freezeResume() {
+    try {
+      freezeUntil = await invoke<number>("freeze_clear");
+    } catch (e) {
+      error = String(e);
+    }
+    stopCountdown();
+  }
+
   let unlistenRun: (() => void) | undefined;
   let unlistenRunning: (() => void) | undefined;
   let unlistenLog: (() => void) | undefined;
@@ -215,6 +272,12 @@
       autoStart = await isAutostartEnabled();
     } catch {
       // plugin unavailable in this build — fine.
+    }
+    try {
+      freezeUntil = await invoke<number>("freeze_status");
+      ensureCountdown();
+    } catch {
+      // backend without freeze support — fine.
     }
     await refresh();
     unlistenRunning = await listen<{ id: string }>("rule_running", (e) => {
@@ -241,6 +304,7 @@
     unlistenRun?.();
     unlistenRunning?.();
     unlistenLog?.();
+    stopCountdown();
   });
 </script>
 
@@ -248,6 +312,21 @@
   <header>
     <h1>WebDAV Sync</h1>
     <div class="header-actions">
+      {#if frozen}
+        <div class="freeze frozen">
+          <span class="freeze-label">Sync frozen · {fmtDuration(remaining)} left</span>
+          <button onclick={() => freezeExtend(60)}>+1h</button>
+          <button onclick={freezeResume}>Resume</button>
+        </div>
+      {:else}
+        <button
+          class="freeze-btn"
+          onclick={() => freezeExtend(60)}
+          title="Pause scheduled and watch-triggered syncs for 1 hour. Run now still works; changes sync when the freeze lifts."
+        >
+          Freeze sync 1h
+        </button>
+      {/if}
       <label class="check header-toggle">
         <input type="checkbox" checked={autoStart} onchange={toggleAutoStart} />
         <span>Start at login</span>
@@ -524,6 +603,10 @@
   .header-actions { display: flex; gap: 14px; align-items: center; }
   .header-toggle { font-size: 12px; color: #555; gap: 6px; }
   .header-toggle input { margin-top: 0; }
+  .freeze { display: flex; align-items: center; gap: 8px; padding: 3px 6px 3px 10px; border: 1px solid #b9d3f0; border-radius: 8px; background: #e7f0fb; }
+  .freeze-label { font-size: 12px; color: #1565c0; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .freeze button { padding: 4px 9px; font-size: 12px; }
+  .freeze-btn { border-color: #cfd8e3; }
   .crumbs { padding: 8px 10px; background: #f0f0f3; border-radius: 6px; margin-bottom: 8px; word-break: break-all; }
   ul.dirs { list-style: none; padding: 0; margin: 12px 0 0; max-height: 360px; overflow: auto; border: 1px solid #e2e2e7; border-radius: 6px; }
   ul.dirs li { border-bottom: 1px solid #f0f0f3; }

@@ -8,6 +8,11 @@
 //! Triggers serialize through the AppState mutex inside `run_rule_impl`, so
 //! a watch event arriving mid-interval can't double-fire a sync. Cancellation
 //! propagates via a watch::channel — dropping the handle stops the task.
+//!
+//! A global "freeze" (AppState::freeze) pauses these automatic triggers; any
+//! trigger that fires while frozen is remembered and coalesced into a single
+//! catch-up sync when the freeze lifts. Manual Run now bypasses the freeze
+//! entirely (it never goes through this task).
 
 use notify_debouncer_mini::{new_debouncer, notify::RecursiveMode};
 use std::collections::HashMap;
@@ -17,7 +22,7 @@ use std::time::Duration;
 use tauri::async_runtime;
 use tokio::sync::{mpsc, watch};
 
-use crate::{run_rule_impl, AppState, RunResult, Rule};
+use crate::{now_ms, run_rule_impl, AppState, RunResult, Rule};
 
 /// Debounce window for FS events. Bursts of file changes within this period
 /// coalesce into a single sync trigger.
@@ -137,17 +142,42 @@ fn spawn_loop(
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         tick.tick().await;
 
+        let mut freeze_rx = state.freeze_watch();
+        // Set when a scheduler/watcher trigger is suppressed mid-freeze. Drives a
+        // single catch-up sync once the freeze lifts so the settled local state
+        // still uploads (crucial for watch-only rules, where no further FS event
+        // would otherwise re-trigger).
+        let mut pending = false;
+
         loop {
+            let until = *freeze_rx.borrow();
+            let frozen = until > now_ms();
+            // While frozen, wake at the resume time; otherwise an effectively-
+            // never sleep so idle runners don't poll.
+            let wait = if frozen {
+                Duration::from_millis((until - now_ms()).max(0) as u64)
+            } else {
+                Duration::from_secs(60 * 60 * 24 * 365)
+            };
+
             tokio::select! {
                 _ = tick.tick(), if interval.is_some() => {
-                    fire(&rule_id, &state, &on_run);
+                    if frozen { pending = true; } else { fire(&rule_id, &state, &on_run); }
                 }
                 Some(_) = fs_rx.recv() => {
-                    fire(&rule_id, &state, &on_run);
+                    if frozen { pending = true; } else { fire(&rule_id, &state, &on_run); }
                 }
+                _ = freeze_rx.changed() => {}
+                _ = tokio::time::sleep(wait) => {}
                 _ = cancel_rx.changed() => {
                     break;
                 }
+            }
+
+            // Freeze lifted (cleared or elapsed) with a trigger waiting: sync once.
+            if pending && *freeze_rx.borrow() <= now_ms() {
+                fire(&rule_id, &state, &on_run);
+                pending = false;
             }
         }
     });

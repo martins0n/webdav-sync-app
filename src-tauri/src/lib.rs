@@ -6,6 +6,7 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use tokio::sync::watch;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Emitter, Manager, WindowEvent};
@@ -18,15 +19,37 @@ pub struct AppState {
     pub data_dir: PathBuf,
     lock: Mutex<()>,
     pub runners: Runners,
+    /// "Freeze automatic sync until" — epoch millis; 0 = not frozen. Only the
+    /// scheduler and watcher honor it; manual Run now / Run all bypass it. A
+    /// trigger suppressed while frozen is coalesced into one catch-up sync when
+    /// the freeze lifts (see runner.rs). In-memory only: a restart clears it.
+    freeze: watch::Sender<i64>,
 }
 
 impl AppState {
     pub fn new(data_dir: PathBuf) -> Self {
+        let (freeze, _) = watch::channel(0i64);
         Self {
             data_dir,
             lock: Mutex::new(()),
             runners: Runners::new(),
+            freeze,
         }
+    }
+
+    /// Active freeze-until epoch-millis, or 0 if not frozen / already elapsed.
+    pub fn freeze_until_ms(&self) -> i64 {
+        let until = *self.freeze.borrow();
+        if until > now_ms() {
+            until
+        } else {
+            0
+        }
+    }
+
+    /// Receiver runners use to wake the instant the freeze is extended/cleared.
+    pub fn freeze_watch(&self) -> watch::Receiver<i64> {
+        self.freeze.subscribe()
     }
 }
 
@@ -115,6 +138,33 @@ pub fn remove_rule_impl(state: &AppState, id: &str) -> Result<(), String> {
     let mut rules = store::load(&state.data_dir);
     rules.retain(|r| r.id != id);
     store::save(&state.data_dir, &rules).map_err(|e| e.to_string())
+}
+
+pub(crate) fn now_ms() -> i64 {
+    Utc::now().timestamp_millis()
+}
+
+/// Max freeze horizon. A single extend can't push the resume time more than 24h
+/// out, so a forgotten freeze can never silently suppress sync indefinitely.
+const FREEZE_MAX_MS: i64 = 24 * 60 * 60 * 1000;
+
+pub fn freeze_status_impl(state: &AppState) -> i64 {
+    state.freeze_until_ms()
+}
+
+/// Extend the freeze by `minutes`, stacking on whatever time is left (like
+/// Amphetamine's "+1 hour"). Returns the new resume time, epoch millis.
+pub fn freeze_extend_impl(state: &AppState, minutes: i64) -> i64 {
+    let now = now_ms();
+    let base = (*state.freeze.borrow()).max(now);
+    let until = (base + minutes.max(0) * 60_000).min(now + FREEZE_MAX_MS);
+    state.freeze.send_replace(until);
+    until
+}
+
+pub fn freeze_clear_impl(state: &AppState) -> i64 {
+    state.freeze.send_replace(0);
+    0
 }
 
 pub fn run_rule_impl(state: &AppState, id: &str) -> Result<RunResult, String> {
@@ -376,6 +426,21 @@ fn remove_rule(state: tauri::State<Arc<AppState>>, id: String) -> Result<(), Str
 }
 
 #[tauri::command]
+fn freeze_status(state: tauri::State<Arc<AppState>>) -> i64 {
+    freeze_status_impl(state.as_ref())
+}
+
+#[tauri::command]
+fn freeze_extend(state: tauri::State<Arc<AppState>>, minutes: i64) -> i64 {
+    freeze_extend_impl(state.as_ref(), minutes)
+}
+
+#[tauri::command]
+fn freeze_clear(state: tauri::State<Arc<AppState>>) -> i64 {
+    freeze_clear_impl(state.as_ref())
+}
+
+#[tauri::command]
 async fn run_rule(
     app: AppHandle,
     state: tauri::State<'_, Arc<AppState>>,
@@ -540,6 +605,9 @@ pub fn run() {
             list_rules,
             save_rule,
             remove_rule,
+            freeze_status,
+            freeze_extend,
+            freeze_clear,
             run_rule,
             list_garbage,
             restore_file,
