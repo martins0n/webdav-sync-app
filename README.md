@@ -24,7 +24,12 @@ Tauri 2 + SvelteKit on top of [rclone](https://rclone.org/).
 - Per-rule scheduler (every N seconds) and live filesystem watcher
   (debounced 2 s).
 - Live rclone log streamed into a per-rule expandable panel during sync.
-- macOS menu-bar tray icon (Show / Run all / Quit), close-to-tray.
+- **Freeze sync** (Amphetamine-style) — pause all scheduled and watched
+  syncs for a stackable +1h (up to 24h); *Run now* still works and a
+  catch-up sync runs when the freeze lifts. The tray icon shows a snowflake
+  badge while frozen.
+- macOS menu-bar tray icon (Show / Run all / Freeze / Resume / Quit),
+  close-to-tray.
 - "Start at login" toggle.
 - Built-in remote folder browser when picking a path on the cloud.
 
@@ -102,12 +107,27 @@ Hints for common providers:
 5. To restore a deleted file (Trash-mode rules only): click **Restore…**,
    pick a file from the listed garbage entries, click **Restore**.
 
+## Freeze sync
+
+Copying a batch of photos and want to reorganise them before they upload?
+Click **Freeze sync 1h** — in the window header or the menu-bar tray — to
+pause every scheduled and watched sync. Each click adds another hour
+(stacking up to 24 h); the header shows a live countdown. **Run now** is
+never blocked, so you can still push on demand.
+
+While frozen, the tray icon wears a small snowflake badge. When the freeze
+lifts — via **Resume** or when the timer runs out — any change made during
+the freeze is uploaded in a single catch-up sync, so the cloud matches your
+final, settled folder rather than every intermediate state. The freeze is
+in-memory only: quitting the app clears it.
+
 ## Tray icon and autostart
 
 The macOS menu-bar **Ωδ** icon shows menu items: *Show window*, *Run all
-rules now*, *Quit*. Closing the window via the red close button hides it
-and the app keeps running with the tray icon — only **Quit** from the tray
-fully exits.
+rules now*, *Freeze sync 1h*, *Resume sync*, *Quit*. While sync is frozen
+the icon carries a small snowflake badge. Closing the window via the red
+close button hides it and the app keeps running with the tray icon — only
+**Quit** from the tray fully exits.
 
 The "Start at login" header toggle registers a macOS LaunchAgent at
 `~/Library/LaunchAgents/com.webdav-sync.app.plist`.
