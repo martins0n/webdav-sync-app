@@ -48,6 +48,8 @@ fn make_rule(local: &Path, suffix: &str, mode: DeleteMode) -> Rule {
         garbage_path: format!("e2e-{suffix}-garbage"),
         interval_seconds: None,
         watch: false,
+        filters: vec![],
+        filter_mode: FilterMode::Exclude,
         enabled: true,
         stats: Stats::default(),
         last_run_at: None,
@@ -206,6 +208,82 @@ fn req_5_remove_rule_is_metadata_only() {
     assert!(
         after.contains("survivor.txt"),
         "Remote file deleted by remove_rule!"
+    );
+}
+
+#[test]
+fn req_6_exclude_filters_skip_matching_files() {
+    skip_if_no_dav!();
+    let data = tempfile::tempdir().unwrap();
+    let state = AppState::new(data.path().to_path_buf());
+    let local = tempfile::tempdir().unwrap();
+    let sfx = unique_suffix();
+
+    std::fs::write(local.path().join("keep.txt"), "keep").unwrap();
+    std::fs::write(local.path().join("skip.rrdata"), "nope").unwrap();
+    std::fs::write(local.path().join(".hidden"), "nope").unwrap();
+
+    let mut rule = make_rule(local.path(), &sfx, DeleteMode::Safe);
+    rule.filter_mode = FilterMode::Exclude;
+    rule.filters = vec!["*.rrdata".into(), ".*".into()];
+    let rule = save_rule_impl(&state, rule).unwrap();
+
+    let res = run_rule_impl(&state, &rule.id).unwrap();
+    assert!(res.success, "rclone failed: {}", res.log_tail);
+    assert_eq!(res.synced, 1, "only keep.txt should upload, got {}", res.synced);
+
+    let listed = rclone_ls(&format!("{REMOTE}:e2e-{sfx}-live"));
+    assert!(listed.contains("keep.txt"), "keep.txt missing: {listed}");
+    assert!(
+        !listed.contains("skip.rrdata"),
+        "excluded *.rrdata file was uploaded: {listed}"
+    );
+    assert!(
+        !listed.contains(".hidden"),
+        "excluded dotfile was uploaded: {listed}"
+    );
+}
+
+#[test]
+fn req_7_include_filters_sync_only_matching() {
+    skip_if_no_dav!();
+    let data = tempfile::tempdir().unwrap();
+    let state = AppState::new(data.path().to_path_buf());
+    let local = tempfile::tempdir().unwrap();
+    let sfx = unique_suffix();
+
+    std::fs::write(local.path().join("photo.ARW"), "raw").unwrap();
+    std::fs::write(local.path().join("note.txt"), "text").unwrap();
+
+    let mut rule = make_rule(local.path(), &sfx, DeleteMode::Safe);
+    rule.filter_mode = FilterMode::Include;
+    rule.filters = vec!["*.ARW".into()];
+    let rule = save_rule_impl(&state, rule).unwrap();
+
+    let res = run_rule_impl(&state, &rule.id).unwrap();
+    assert!(res.success, "rclone failed: {}", res.log_tail);
+    assert_eq!(res.synced, 1, "only the .ARW file should upload, got {}", res.synced);
+
+    let listed = rclone_ls(&format!("{REMOTE}:e2e-{sfx}-live"));
+    assert!(listed.contains("photo.ARW"), "photo.ARW missing: {listed}");
+    assert!(
+        !listed.contains("note.txt"),
+        "non-included note.txt was uploaded despite include-only filter: {listed}"
+    );
+}
+
+#[test]
+fn save_rule_normalizes_filters() {
+    // No dav needed — pure metadata normalization.
+    let data = tempfile::tempdir().unwrap();
+    let state = AppState::new(data.path().to_path_buf());
+    let mut rule = make_rule(Path::new("/tmp"), "x", DeleteMode::Safe);
+    rule.filters = vec!["  *.rrdata  ".into(), "".into(), "   ".into(), ".*".into()];
+    let saved = save_rule_impl(&state, rule).unwrap();
+    assert_eq!(
+        saved.filters,
+        vec!["*.rrdata".to_string(), ".*".to_string()],
+        "blank lines should be dropped and patterns trimmed"
     );
 }
 

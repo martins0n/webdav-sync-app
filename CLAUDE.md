@@ -24,14 +24,16 @@ first.
 ## File map
 
 ```
-src/routes/+page.svelte               All UI: rules list, rule editor, browser modal,
-                                      restore modal, per-rule live log, autostart toggle,
+src/routes/+page.svelte               All UI: rules list, rule editor (incl. per-rule file
+                                      filters: ignore-matching / only-sync-matching), browser
+                                      modal, restore modal, per-rule live log, autostart toggle,
                                       global freeze-sync control (Amphetamine-style +1h).
 src/routes/+layout.ts                 SvelteKit SPA marker (ssr=false).
 src-tauri/src/lib.rs                  AppState (incl. global freeze watch channel); all
                                       `*_impl` functions and Tauri command wrappers; tray +
                                       autostart wiring; run_payload helpers.
-src-tauri/src/store.rs                Rule struct + DeleteMode + Stats. JSON load/save in
+src-tauri/src/store.rs                Rule struct + DeleteMode + FilterMode (per-rule
+                                      exclude/include patterns) + Stats. JSON load/save in
                                       app_data_dir/rules.json.
 src-tauri/src/rclone.rs               Subcommand allowlist enum, run / run_streaming,
                                       parse_counts, rclone_bin() lookup.
@@ -46,8 +48,9 @@ src-tauri/icons/                      App + tray icons. tray-icon-template.png i
                                       kept in /tmp (regenerate with rsvg-convert + magick +
                                       iconutil; see git log for the scripts).
 src-tauri/Cargo.toml                  Pinned: tauri 2 (`tray-icon` feature), plugin-dialog,
-                                      plugin-autostart, notify 6, notify-debouncer-mini 0.4,
-                                      tokio (sync, time, rt, macros).
+                                      plugin-autostart, plugin-single-instance (guards against
+                                      the double-launch on login), notify 6,
+                                      notify-debouncer-mini 0.4, tokio (sync, time, rt, macros).
 src-tauri/tauri.conf.json             Bundle config; identifier com.webdav-sync.app.
 src-tauri/capabilities/default.json   `core:default`, `dialog:allow-open`, `autostart:default`.
 package.json                          npm only (no pnpm/yarn). Tauri CLI + plugin-dialog +
@@ -147,7 +150,7 @@ The 6 e2e tests skip gracefully if `dav:` isn't configured (they print
 `SKIPPING:` to stderr but pass). Runner-bearing tests use
 `#[tokio::test(flavor = "multi_thread")]` and don't require `dav:`.
 
-Current test count: **3 unit + 14 in tests/e2e.rs = 17 total**, ~10 s runtime
+Current test count: **3 unit + 17 in tests/e2e.rs = 20 total**, ~10 s runtime
 when `dav:` is up. (Three of the e2e tests cover the global freeze: two pure
 stack/cap checks that run without `dav:`, plus one runner test that needs it.)
 

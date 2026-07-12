@@ -8,6 +8,21 @@ pub enum DeleteMode {
     Trash,
 }
 
+/// How the per-rule `filters` list is applied when running rclone.
+///
+/// `Exclude` (the default) skips matching files; everything else syncs.
+/// `Include` syncs *only* matching files; everything else is skipped.
+/// Kept as a mode rather than two separate include/exclude lists so the
+/// behaviour is unambiguous — rclone's first-match-wins ordering when you mix
+/// `--include` and `--exclude` is a well-known footgun we sidestep entirely.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum FilterMode {
+    #[default]
+    Exclude,
+    Include,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct Stats {
     pub synced: u64,
@@ -39,6 +54,13 @@ pub struct Rule {
     /// Watch `local_path` for FS changes and re-sync on change (debounced).
     #[serde(default)]
     pub watch: bool,
+    /// rclone filter patterns (one per entry), applied per `filter_mode`. Empty
+    /// = sync everything. Patterns are matched against each file's path, e.g.
+    /// `*.rrdata` (by extension), `.*` (dotfiles), `node_modules/**` (a folder).
+    #[serde(default)]
+    pub filters: Vec<String>,
+    #[serde(default)]
+    pub filter_mode: FilterMode,
     /// Master switch. When false, neither the scheduler nor the watcher fires;
     /// `Run now` still works.
     #[serde(default = "default_true")]

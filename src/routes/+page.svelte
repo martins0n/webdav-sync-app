@@ -10,6 +10,7 @@
   import { onMount, onDestroy } from "svelte";
 
   type Mode = "safe" | "trash";
+  type FilterMode = "exclude" | "include";
 
   type Stats = { synced: number; deleted: number; restored: number };
 
@@ -23,6 +24,8 @@
     garbage_path: string;
     interval_seconds: number | null;
     watch: boolean;
+    filters: string[];
+    filter_mode: FilterMode;
     enabled: boolean;
     stats: Stats;
     last_run_at: string | null;
@@ -71,6 +74,8 @@
       garbage_path: "",
       interval_seconds: null,
       watch: false,
+      filters: [],
+      filter_mode: "exclude",
       enabled: true,
       stats: { synced: 0, deleted: 0, restored: 0 },
       last_run_at: null,
@@ -372,6 +377,9 @@
             <span class="mode mode-auto">every {rule.interval_seconds}s</span>
           {/if}
           {#if rule.enabled && rule.watch}<span class="mode mode-auto">watching</span>{/if}
+          {#if rule.filters.length}
+            <span class="mode mode-filter">{rule.filter_mode === "include" ? "only" : "ignore"} {rule.filters.length}</span>
+          {/if}
         </div>
         <div class="actions">
           <button onclick={() => run(rule)} disabled={!!running[rule.id]}>
@@ -394,6 +402,13 @@
             <code>{rule.remote}:{rule.garbage_path}</code>
           {/if}
         </div>
+        {#if rule.filters.length}
+          <div>
+            <span class="lbl">Filters</span>
+            <span class="filter-verb">{rule.filter_mode === "include" ? "only sync" : "ignore"}</span>
+            {#each rule.filters as f}<code>{f}</code> {/each}
+          </div>
+        {/if}
         <div class="stats">
           <span>synced <strong>{rule.stats.synced}</strong></span>
           {#if rule.delete_mode === "trash"}
@@ -476,6 +491,33 @@
       {:else}
         <input type="hidden" bind:value={editing.garbage_path} />
       {/if}
+
+      <fieldset>
+        <legend>File filters (optional)</legend>
+        <label class="radio">
+          <input type="radio" bind:group={editing.filter_mode} value="exclude" />
+          <div>
+            <strong>Ignore matching</strong> — sync everything <em>except</em> files matching the patterns below.
+          </div>
+        </label>
+        <label class="radio">
+          <input type="radio" bind:group={editing.filter_mode} value="include" />
+          <div>
+            <strong>Only sync matching</strong> — sync <em>only</em> files matching the patterns below; ignore all others.
+          </div>
+        </label>
+        <textarea
+          rows="4"
+          placeholder={editing.filter_mode === "include" ? "*.ARW\n*.jpg" : "*.rrdata\n.*\nnode_modules/**"}
+          value={editing.filters.join("\n")}
+          oninput={(e) => { editing!.filters = (e.target as HTMLTextAreaElement).value.split("\n"); }}
+        ></textarea>
+        <small>
+          One <a href="https://rclone.org/filtering/" target="_blank" rel="noreferrer">rclone pattern</a> per line, matched against each file's path.
+          e.g. <code>*.ARW</code> (by extension), <code>.*</code> (dotfiles), <code>node_modules/**</code> (a folder).
+          Leave empty to sync everything. Skipped files are never uploaded and, in trash mode, left untouched on the cloud.
+        </small>
+      </fieldset>
 
       <fieldset>
         <legend>Automation</legend>
@@ -582,7 +624,8 @@
   button:disabled { opacity: 0.5; cursor: default; }
   button:hover:not(:disabled) { background: #efeff2; }
   button.danger { color: #b00020; border-color: #e3b3bb; }
-  input, select { padding: 6px 8px; border: 1px solid #c8c8cc; border-radius: 6px; font-size: 13px; width: 100%; box-sizing: border-box; background: #fff; }
+  input, select, textarea { padding: 6px 8px; border: 1px solid #c8c8cc; border-radius: 6px; font-size: 13px; width: 100%; box-sizing: border-box; background: #fff; }
+  textarea { font-family: ui-monospace, monospace; font-size: 12px; resize: vertical; margin-top: 4px; }
   label { display: block; margin: 10px 0; font-size: 13px; color: #555; }
   label > input, label > select { margin-top: 4px; }
   small { display: block; color: #666; margin-top: 4px; }
@@ -607,6 +650,8 @@
   .mode-trash { background: #fff3e0; color: #ef6c00; }
   .mode-disabled { background: #ececef; color: #777; }
   .mode-auto { background: #e8f5e9; color: #2e7d32; }
+  .mode-filter { background: #f3e8fd; color: #7b2fbf; }
+  .filter-verb { color: #7b2fbf; font-size: 12px; font-weight: 500; margin-right: 4px; }
   .check { display: flex; gap: 8px; align-items: flex-start; }
   .check input { width: auto; margin-top: 3px; }
   .header-actions { display: flex; gap: 14px; align-items: center; }

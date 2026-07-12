@@ -13,7 +13,7 @@ use tauri::{AppHandle, Emitter, Manager, WindowEvent};
 
 pub use rclone::{RunCounts, Subcommand};
 pub use runner::Runners;
-pub use store::{DeleteMode, Rule, Stats};
+pub use store::{DeleteMode, FilterMode, Rule, Stats};
 
 pub struct AppState {
     pub data_dir: PathBuf,
@@ -97,6 +97,15 @@ pub fn save_rule_impl(state: &AppState, mut rule: Rule) -> Result<Rule, String> 
     {
         return Err("local_path, remote and remote_path are required".into());
     }
+    // Drop blank / whitespace-only filter lines so the textarea's trailing
+    // newline doesn't persist an empty pattern (which rclone would treat as
+    // "match everything").
+    rule.filters = rule
+        .filters
+        .iter()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
     if matches!(rule.delete_mode, DeleteMode::Trash) {
         if rule.garbage_path.trim().is_empty() {
             return Err("garbage_path is required when delete mode is `trash`".into());
@@ -191,22 +200,32 @@ pub fn run_rule_impl_with_log<F: FnMut(&str)>(
     let dst = format!("{}:{}", rule.remote, rule.remote_path);
     let ts = Utc::now().format("%Y-%m-%d-%H%M%S").to_string();
 
-    // Phase 2 — actually run rclone with no lock held.
-    let out = match rule.delete_mode {
-        DeleteMode::Safe => rclone::run_streaming(
-            Subcommand::Copy,
-            &[&rule.local_path, &dst],
-            |line| on_log(line),
-        )?,
+    // Phase 2 — actually run rclone with no lock held. `backup` is declared out
+    // here so it outlives the borrowed `args` slice below.
+    let backup;
+    let mut args: Vec<&str> = vec![&rule.local_path, &dst];
+    let sub = match rule.delete_mode {
+        DeleteMode::Safe => Subcommand::Copy,
         DeleteMode::Trash => {
-            let backup = format!("{}:{}/{}", rule.remote, rule.garbage_path, ts);
-            rclone::run_streaming(
-                Subcommand::Sync,
-                &[&rule.local_path, &dst, "--backup-dir", &backup],
-                |line| on_log(line),
-            )?
+            backup = format!("{}:{}/{}", rule.remote, rule.garbage_path, ts);
+            args.push("--backup-dir");
+            args.push(&backup);
+            Subcommand::Sync
         }
     };
+    // Filters are scope-narrowing only: excluded / non-included files are never
+    // uploaded and, in trash mode, are left untouched on the remote (rclone sync
+    // does not delete files that its filters skip). So this can't violate the
+    // safety prime directive.
+    let filter_flag = match rule.filter_mode {
+        FilterMode::Exclude => "--exclude",
+        FilterMode::Include => "--include",
+    };
+    for pat in rule.filters.iter().map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        args.push(filter_flag);
+        args.push(pat);
+    }
+    let out = rclone::run_streaming(sub, &args, |line| on_log(line))?;
 
     let safety_violation = (out.counts.hard_deleted > 0).then(|| {
         format!(
@@ -564,6 +583,14 @@ fn set_tray_frozen(app: &AppHandle, frozen: bool) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // MUST be the first plugin registered. On macOS the app can be launched
+        // twice at login — once by session restore ("reopen windows") and once
+        // by the autostart LaunchAgent — which would leave two tray icons and two
+        // sets of runners. The single-instance guard makes the second launch
+        // focus the already-running window and exit instead.
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            show_main(app);
+        }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,

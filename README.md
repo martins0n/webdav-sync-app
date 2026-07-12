@@ -23,6 +23,9 @@ Tauri 2 + SvelteKit on top of [rclone](https://rclone.org/).
     file disappears, restorable from inside the app.
 - Per-rule scheduler (every N seconds) and live filesystem watcher
   (debounced 2 s).
+- Per-rule **file filters** — either *ignore matching* files (e.g.
+  `*.rrdata`, dotfiles) or *only sync matching* files (e.g. only `*.ARW`
+  raws), using [rclone patterns](https://rclone.org/filtering/).
 - Live rclone log streamed into a per-rule expandable panel during sync.
 - **Freeze sync** (Amphetamine-style) — pause all scheduled and watched
   syncs for a stackable +1h (up to 24h); *Run now* still works and a
@@ -107,6 +110,25 @@ Hints for common providers:
 5. To restore a deleted file (Trash-mode rules only): click **Restore…**,
    pick a file from the listed garbage entries, click **Restore**.
 
+## File filters
+
+Each rule can narrow *which* files it syncs, via the **File filters** section
+of the rule editor. Pick a mode and list one
+[rclone pattern](https://rclone.org/filtering/) per line:
+
+- **Ignore matching** — sync everything *except* the listed patterns. Good
+  for junk like `*.rrdata`, `.*` (dotfiles), or `node_modules/**`.
+- **Only sync matching** — sync *only* the listed patterns and ignore the
+  rest. Good for "just the RAWs": `*.ARW`.
+
+Patterns match against each file's path: `*.ARW` (by extension), `.*`
+(dotfiles), `node_modules/**` (a whole folder). Leave the box empty to sync
+everything.
+
+Filters only *narrow* what a rule touches — they never delete. A skipped
+file is simply not uploaded, and in Trash mode any matching-but-skipped file
+already on the cloud is left untouched.
+
 ## Freeze sync
 
 Copying a batch of photos and want to reorganise them before they upload?
@@ -131,6 +153,11 @@ close button hides it and the app keeps running with the tray icon — only
 
 The "Start at login" header toggle registers a macOS LaunchAgent at
 `~/Library/LaunchAgents/com.webdav-sync.app.plist`.
+
+The app is **single-instance**: if macOS tries to launch it a second time —
+e.g. the login LaunchAgent plus session restore both firing after a reboot —
+the second launch just focuses the existing window and exits, so you never
+end up with two tray icons or two sets of runners.
 
 ## Where things live
 
